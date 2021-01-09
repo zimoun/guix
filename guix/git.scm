@@ -49,6 +49,7 @@
             update-cached-checkout
             url+commit->name
             latest-repository-commit
+            commit-closure
             commit-difference
             commit-relation
 
