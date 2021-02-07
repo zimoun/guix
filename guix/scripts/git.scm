@@ -18,9 +18,13 @@
 
 (define-module (guix scripts git)
   #:use-module (ice-9 match)
+  #:use-module (ice-9 format)
   #:use-module (guix ui)
   #:use-module (guix scripts)
+  #:use-module (srfi srfi-1)
   #:export (guix-git))
+
+(define %sub-commands '("authenticate" "log"))
 
 (define (show-help)
   (display (G_ "Usage: guix git COMMAND ARGS...
@@ -30,6 +34,8 @@ Operate on Git repositories.\n"))
   (newline)
   (display (G_ "\
    authenticate    verify commit signatures and authorizations\n"))
+  (display (G_ "\
+   log             show Guix commit logs.\n"))
   (newline)
   (display (G_ "
   -h, --help             display this help and exit"))
@@ -37,8 +43,6 @@ Operate on Git repositories.\n"))
   -V, --version          display version information and exit"))
   (newline)
   (show-bug-report-information))
-
-(define %sub-commands '("authenticate" "log"))
 
 (define (resolve-sub-command name)
   (let ((module (resolve-interface
@@ -61,7 +65,6 @@ Operate on Git repositories.\n"))
       ((or ("-V") ("--version"))
        (show-version-and-exit "guix git"))
       ((sub-command args ...)
-       (if (member sub-command %sub-commands)
+       (if (find (lambda (s) (string=? s sub-command)) %sub-commands)
            (apply (resolve-sub-command sub-command) args)
-           (format (current-error-port)
-                   (G_ "guix git: invalid sub-command~%")))))))
+           (leave (G_ "~a: invalid sub-command~%") sub-command))))))

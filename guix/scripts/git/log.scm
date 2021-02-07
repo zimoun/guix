@@ -27,12 +27,14 @@
   #:use-module (ice-9 format)
   #:use-module (ice-9 match)
   #:use-module (ice-9 regex)
+  #:use-module (ice-9 vlist)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-19)
   #:use-module (srfi srfi-26)
   #:use-module (srfi srfi-37)
   #:export (guix-git-log))
 
+(define channels (channel-list '()))
 
 (define %formats
   '("oneline" "medium" "full"))
@@ -53,6 +55,11 @@
                       (alist-cons 'channel-cache-path
                                   (string->symbol arg) result)
                       (list-channels))))
+        (option '("date") #t #f
+                (lambda (opt name arg result)
+                  (unless (string-match "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" arg)
+                    (leave (G_ "~a: invalid date format~%") arg))
+                  (alist-cons 'date arg result)))
         (option '("format") #t #f
                 (lambda (opt name arg result)
                   (unless (member arg %formats)
@@ -64,6 +71,9 @@
         (option '("oneline") #f #f
                 (lambda (opt name arg result)
                   (alist-cons 'oneline? #t result)))
+        (option '("parents") #t #f
+                (lambda (opt name arg result)
+                  (alist-cons 'parents arg result)))
         (option '("pretty") #t #f
                 (lambda (opt name arg result)
                   (alist-cons 'pretty arg result)))))
@@ -73,7 +83,6 @@
 
 (define (list-channels)
   "List channels and their checkout path"
-  (define channels (channel-list '()))
   (for-each (lambda (channel)
               (format #t "~a~%  ~a~%"
                       (channel-name channel)
@@ -87,13 +96,17 @@ Show Guix commit logs.\n"))
       --channel-cache-path[=CHANNEL]
                          show checkout path from CHANNEL"))
   (display (G_ "
+      --date=YYYY-MM-DD  show commits from YYYY-MM-DD"))
+  (display (G_ "
       --format=FORMAT    show log according to FORMAT"))
   (display (G_ "
       --grep=REGEXP      show commits whose message matches REGEXP"))
   (display (G_ "
       --oneline          show short hash and summary of commits"))
   (display (G_ "
-      --pretty=<string>  show log according to string"))
+      --parents=COMMIT   show commit parents"))
+  (display (G_ "
+      --pretty=STRING    show log according to STRING"))
   (newline)
   (display (G_ "
   -h, --help             display this help and exit"))
@@ -136,8 +149,6 @@ string, in the order they appear"
 
 (define (show-channel-cache-path channel)
   "Display channel checkout path."
-  (define channels (channel-list '()))
-
   (let ((found-channel (find (lambda (element)
                                (equal? channel (channel-name element)))
                              channels)))
@@ -194,8 +205,6 @@ id instead of the 40-character one."
 
 (define (get-commits)
   "Return a list with commits from all channels."
-  (define channels (channel-list '()))
-
   (fold (lambda (channel commit-list)
           (let* ((channel-path (url-cache-directory (channel-url channel)))
                  (repository (repository-open channel-path))
@@ -209,26 +218,140 @@ id instead of the 40-character one."
               (append (set->list (commit-closure latest-commit))
                       commit-list)))) '() channels))
 
+
+(define (get-and-show-commits fmt abbrev-commit regexp)
+  "Display commits from all channels following the format specified by fmt and
+abbrev-commit. If regexp is set, then only commits whose message match that
+regexp are displayed."
+  (for-each
+   (lambda (channel)
+     (let* ((channel-path  (url-cache-directory (channel-url channel)))
+            (repository    (repository-open channel-path))
+            (latest-commit (commit-lookup repository
+                                          (object-id
+                                           (revparse-single
+                                            repository "origin/master")))))
+       (begin (hashq-set! %channels-repositories channel-path repository)
+              (let loop ((commits (list latest-commit))
+                         (visited vlist-null))
+                (match commits
+                  (()
+                   (repository-close! repository))
+                  ((head . tail)
+                   (if (vhash-assq head visited)
+                       (loop tail visited)
+                       (begin
+                         (when (or (not regexp)
+                                   (string-match regexp (commit-message head)))
+                           (show-commit head fmt abbrev-commit))
+                         (loop (append tail (commit-parents head))
+                               (vhash-consq head #t visited))))))))))
+   channels))
+
+;; commit-hash cannot be short commit hash
+(define (show-parents commit-hash)
+  "Show parents from a commit whose id is commit-hash"
+  (for-each
+   (lambda (channel)
+     (let* ((channel-path  (url-cache-directory (channel-url channel)))
+            (repository    (repository-open channel-path))
+            (latest-commit (commit-lookup repository
+                                          (object-id
+                                           (revparse-single
+                                            repository "origin/master")))))
+       (begin (hashq-set! %channels-repositories channel-path repository)
+              (let loop ((commits (list latest-commit))
+                         (visited vlist-null))
+                (match commits
+                  (()
+                   (repository-close! repository))
+                  ((head . tail)
+                   (if (vhash-assq head visited)
+                       (loop tail visited)
+                       (if (oid=? commit-hash (commit-id head))
+                           (format #t "~{~a~%~}" (map (compose oid->string
+                                                               commit-id)
+                                                     (commit-parents head)))
+                           (loop (append (commit-parents head) tail)
+                                 (vhash-consq head #t visited))))))))))
+   channels))
+
+(define (get-commits-from time)
+  "Return a list of commits, from all channels, committed in time, which is a
+number of seconds since epoch"
+  (fold (lambda (channel commit-list)
+          (let* ((channel-path  (url-cache-directory (channel-url channel)))
+                 (repository    (repository-open channel-path))
+                 (latest-commit (commit-lookup repository
+                                               (object-id
+                                                (revparse-single
+                                                 repository "origin/master")))))
+            (begin (hashq-set! %channels-repositories channel-path repository)
+                   (append (let loop ((commits (list latest-commit))
+                                      (visited vlist-null)
+                                      (result  '()))
+                             (match commits
+                               (()
+                                result)
+                               ((head . tail)
+                                (if (vhash-assq head visited)
+                                    (loop tail visited result)
+                                    (if (and (>= (commit-time head) time)
+                                             (< (commit-time head) (+ time 86400)))
+                                        (loop (append tail (commit-parents head))
+                                              (vhash-consq head #t visited)
+                                              (cons head result))
+                                        (loop (append tail (commit-parents head))
+                                              (vhash-consq head #t visited)
+                                              result)))))))))) '()
+                                              channels))
+
+(define (show-commits-from date)
+  "Show all commits whose committer date are the same as date, which is in the
+YYYY-MM-DD format."
+
+  (define date-regex "^([0-9]{4})-([0-9]{2})-([0-9]{2})$")
+
+  (define (date->seconds date)
+    "Return the number of seconds since epoch from a given date in the
+YYYY-MM-DD format"
+    (let* ((y-m-d (map string->number
+                       (string-split
+                        (regexp-substitute #f
+                                           (string-match date-regex date)
+                                           'pre 3 " " 2 " " 1 'post)
+                        #\space)))
+           (date-parameters
+            (append (list 0 0 0 0) y-m-d '(0))))
+      (time-second (date->time-utc
+                    (apply make-date date-parameters)))))
+
+  (for-each (lambda (commit)
+              (format #t "~a ~a~%"
+                      (commit-short-id commit)
+                      (commit-summary commit)))
+            (get-commits-from (date->seconds date))))
+
 (define (guix-git-log . args)
   (define options
     (parse-command-line args %options (list %default-options)))
 
   (let ((channel-cache      (assoc-ref options 'channel-cache-path))
+        (date               (assoc-ref options 'date))
         (oneline?           (assoc-ref options 'oneline?))
         (format-type        (assoc-ref options 'format))
+        (commit             (assoc-ref options 'parents))
         (pretty-string      (assoc-ref options 'pretty))
         (regexp             (assoc-ref options 'grep)))
     (with-error-handling
       (cond
        (channel-cache
         (show-channel-cache-path channel-cache))
+       (date
+        (show-commits-from date))
        (oneline?
         (leave-on-EPIPE
-         (for-each (lambda (commit)
-                     (when (or (not regexp)
-                               (string-match regexp (commit-message commit)))
-                       (show-commit commit 'oneline #t)))
-                   (get-commits))))
+         (get-and-show-commits 'oneline #t regexp)))
        (format-type
         (leave-on-EPIPE
          (for-each (lambda (commit)
@@ -236,11 +359,14 @@ id instead of the 40-character one."
                                (string-match regexp (commit-message commit)))
                        (show-commit commit format-type #f)))
                    (get-commits))))
+       (commit
+        (show-parents (string->oid commit)))
        (pretty-string
         (let ((pretty-show (cut pretty-show-commit pretty-string <>)))
           (leave-on-EPIPE
            (for-each (lambda (commit)
                        (when (or (not regexp)
-                                 (string-match regexp (commit-message commit)))
+                                 (string-match regexp
+                                               (commit-message commit)))
                          (pretty-show commit)))
                      (get-commits)))))))))
