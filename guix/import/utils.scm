@@ -43,6 +43,7 @@
   #:use-module (ice-9 rdelim)
   #:use-module (ice-9 receive)
   #:use-module (ice-9 regex)
+  #:use-module (ice-9 exceptions)
   #:use-module (srfi srfi-1)
   #:use-module (srfi srfi-9)
   #:use-module (srfi srfi-11)
@@ -74,7 +75,10 @@
 
             guix-name
 
-            recursive-import))
+            recursive-import
+
+            make-import-error
+            import-error?))
 
 (define (factorize-uri uri version)
   "Factorize URI, a package tarball URI as a string, such that any occurrences
@@ -483,3 +487,5 @@ to obtain the Guix package name corresponding to the upstream name."
                            (string-append
                             (node-name node)
                             (or (node-version node) ""))))))
+
+(define-exception-type &import-error &programming-error make-import-error import-error?)

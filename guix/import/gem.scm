@@ -33,41 +33,44 @@
   #:use-module (guix base16)
   #:use-module (guix base32)
   #:use-module ((guix build-system ruby) #:select (rubygems-uri))
+  #:use-module (srfi srfi-34)
+  #:use-module (srfi srfi-35)
+  #:use-module (ice-9 exceptions)
   #:export (gem->guix-package
             %gem-updater
             gem-recursive-import))
 
 ;; Gems as defined by the API at <https://rubygems.org/api/v1/gems>.
 (define-json-mapping <gem> make-gem gem?
-  json->gem
-  (name          gem-name)                        ;string
-  (platform      gem-platform)                    ;string
-  (version       gem-version)                     ;string
-  (authors       gem-authors)                     ;string
-  (licenses      gem-licenses "licenses"          ;list of strings
-                 (lambda (licenses)
-                   ;; This is sometimes #nil (the JSON 'null' value).  Arrange
-                   ;; to always return a list.
-                   (cond ((not licenses) '())
-                         ((unspecified? licenses) '())
-                         ((vector? licenses) (vector->list licenses))
-                         (else '()))))
-  (info          gem-info)
-  (sha256        gem-sha256 "sha"                 ;bytevector
-                 base16-string->bytevector)
-  (home-page     gem-home-page "homepage_uri")    ;string
-  (dependencies  gem-dependencies "dependencies"  ;<gem-dependencies>
-                 json->gem-dependencies))
+json->gem
+(name          gem-name)                        ;string
+(platform      gem-platform)                    ;string
+(version       gem-version)                     ;string
+(authors       gem-authors)                     ;string
+(licenses      gem-licenses "licenses"          ;list of strings
+               (lambda (licenses)
+                 ;; This is sometimes #nil (the JSON 'null' value).  Arrange
+                 ;; to always return a list.
+                 (cond ((not licenses) '())
+                       ((unspecified? licenses) '())
+                       ((vector? licenses) (vector->list licenses))
+                       (else '()))))
+(info          gem-info)
+(sha256        gem-sha256 "sha"                 ;bytevector
+               base16-string->bytevector)
+(home-page     gem-home-page "homepage_uri")    ;string
+(dependencies  gem-dependencies "dependencies"  ;<gem-dependencies>
+               json->gem-dependencies))
 
 (define-json-mapping <gem-dependencies> make-gem-dependencies
-  gem-dependencies?
-  json->gem-dependencies
-  (development   gem-dependencies-development     ;list of <gem-dependency>
-                 "development"
-                 json->gem-dependency-list)
-  (runtime       gem-dependencies-runtime         ;list of <gem-dependency>
-                 "runtime"
-                 json->gem-dependency-list))
+gem-dependencies?
+json->gem-dependencies
+(development   gem-dependencies-development     ;list of <gem-dependency>
+               "development"
+               json->gem-dependency-list)
+(runtime       gem-dependencies-runtime         ;list of <gem-dependency>
+               "runtime"
+               json->gem-dependency-list))
 
 (define (json->gem-dependency-list vector)
   (if (and vector (not (unspecified? vector)))
@@ -145,7 +148,7 @@ VERSION, HASH, HOME-PAGE, DESCRIPTION, DEPENDENCIES, and LICENSES."
                                  dependencies
                                  licenses)
                   dependencies-names))
-        (values #f '()))))
+        (make-import-error))))
 
 (define (guix-package->gem-name package)
   "Given a PACKAGE built from rubygems.org, return the name of the

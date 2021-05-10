@@ -20,6 +20,7 @@
 
 (define-module (test-gem)
   #:use-module (guix import gem)
+  #:use-module (guix import utils)
   #:use-module (guix base32)
   #:use-module (gcrypt hash)
   #:use-module (guix tests)
@@ -82,28 +83,39 @@
               (values (open-input-string test-foo-json)
                       (string-length test-foo-json)))
              (_ (error "Unexpected URL: " url)))))
-    (match (gem->guix-package "foo")
-      (('package
-         ('name "ruby-foo")
-         ('version "1.0.0")
-         ('source ('origin
-                    ('method 'url-fetch)
-                    ('uri ('rubygems-uri "foo" 'version))
-                    ('sha256
-                     ('base32
-                      "1a270mlajhrmpqbhxcqjqypnvgrq4pgixpv3w9gwp1wrrapnwrzk"))))
-         ('build-system 'ruby-build-system)
-         ('propagated-inputs
-          ('quasiquote
-           (("bundler" ('unquote 'bundler))
-            ("ruby-bar" ('unquote 'ruby-bar)))))
-         ('synopsis "A cool gem")
-         ('description "This package provides a cool gem")
-         ('home-page "https://example.com")
-         ('license ('list 'license:expat 'license:asl2.0)))
-       #t)
-      (x
-       (pk 'fail x #f)))))
+        (match (gem->guix-package "foo")
+          (('package
+             ('name "ruby-foo")
+             ('version "1.0.0")
+             ('source ('origin
+                        ('method 'url-fetch)
+                        ('uri ('rubygems-uri "foo" 'version))
+                        ('sha256
+                         ('base32
+                          "1a270mlajhrmpqbhxcqjqypnvgrq4pgixpv3w9gwp1wrrapnwrzk"))))
+             ('build-system 'ruby-build-system)
+             ('propagated-inputs
+              ('quasiquote
+               (("bundler" ('unquote 'bundler))
+                ("ruby-bar" ('unquote 'ruby-bar)))))
+             ('synopsis "A cool gem")
+             ('description "This package provides a cool gem")
+             ('home-page "https://example.com")
+             ('license ('list 'license:expat 'license:asl2.0)))
+           #t)
+          (x
+           (pk 'fail x #f)))))
+
+(test-assert "gem->guix-package should throw if package does not exists"
+  (mock ((guix import gem) rubygems-fetch
+         (lambda (name)
+           (match name
+             ("does-not-exist" #f))))                  
+        (with-exception-handler
+            (lambda (exn)
+              (import-error? exn))
+          (lambda ()
+            (gem->guix-package "do-not-exist")))))
 
 (test-assert "gem-recursive-import"
   ;; Replace network resources with sample data.
